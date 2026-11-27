@@ -275,6 +275,7 @@ export async function enforceEngineBoundary(
   }
 
   const summary = [...contradictions.map((entry) => entry.detail), ...crossed.map((line) => `line crossed: ${line}`)].join("; ");
+  const correctionOutcomes = guardOutcomes(turn.conversation, liveStateFor(campaign.id), campaign.gameSettings.tableLanguage);
 
   // The narration is echoed back explicitly: a turn that ended on a pure
   // narration call never pushed that assistant message into the conversation,
@@ -287,7 +288,7 @@ export async function enforceEngineBoundary(
       { role: "assistant", content: narration },
       {
         role: "user",
-        content: [contradictions.length ? buildCorrectionPrompt(contradictions) : "", crossed.length ? buildLinePrompt(crossed) : ""]
+        content: [contradictions.length ? buildCorrectionPrompt(contradictions, correctionOutcomes.toolReceipts) : "", crossed.length ? buildLinePrompt(crossed) : ""]
           .filter(Boolean)
           .join("\n\n"),
       },

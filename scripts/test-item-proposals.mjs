@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
   canResolveProposal,
+  duplicateAppliedProblem,
   proposalExpired,
   proposalSummary,
   PROPOSAL_TOOL_NAMES,
@@ -16,6 +17,17 @@ function test(name, fn) {
   fn();
   passed += 1;
 }
+
+test("audit duplicates block auto-applied loot and coin", () => {
+  const recent = [
+    { kind: "grant_item", characterId: "c1", delta: { name: "Dagger", qty: 1 }, createdAt: new Date(Date.now() - 1_000).toISOString(), revertedAt: null },
+    { kind: "modify_gold", characterId: "c1", delta: { copper: 30 }, createdAt: new Date(Date.now() - 1_000).toISOString(), revertedAt: null },
+  ];
+  assert.ok(duplicateAppliedProblem("grant_item", { item: "Rusty Dagger", srdName: "Dagger", qty: 1 }, { id: "c1", name: "Mira" }, recent, Date.now()));
+  assert.ok(duplicateAppliedProblem("modify_gold", { coins: "+3 sp" }, { id: "c1", name: "Mira" }, recent, Date.now()));
+  assert.equal(duplicateAppliedProblem("grant_item", { item: "Rusty Dagger", srdName: "Dagger", qty: 1, additional: true }, { id: "c1", name: "Mira" }, recent, Date.now()), null);
+});
+
 
 test("only inventory/gold tools are eligible, only when enabled", () => {
   assert.ok(shouldProposeItemChange(true, "grant_item", {}));

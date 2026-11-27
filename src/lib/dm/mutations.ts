@@ -14,7 +14,8 @@ import { defaultRng } from "@/lib/dice";
 import { getDmTurn, type DmTurn } from "@/lib/db/dm-turns";
 import { z } from "zod";
 import { getSheetById, patchSheet } from "@/lib/db/sheets";
-import { insertSheetAudit } from "@/lib/db/sheet-audit";
+import { insertSheetAudit, listRecentAudit } from "@/lib/db/sheet-audit";
+import { duplicateAppliedProblem } from "@/lib/dm/proposal-logic";
 import { insertCharacterEvent } from "@/lib/db/character-events";
 import { allocateSeq, type Campaign } from "@/lib/db/campaigns";
 import { levelForXp } from "@/lib/srd";
@@ -311,7 +312,7 @@ export const mutationTools: ToolDef[] = [
       description: "Whole gold pieces: positive to gain, negative to spend or lose. Omit it when coins says the amount.",
     },
     coins: { type: "string", description: "Money in the coins' codes pp, gp, ep, sp and cp ('3 gp 4 sp'), whatever the table's language. Start it with - to spend or + to gain: '-5 sp', '+340 sp'. For anything under a gold piece or priced in another coin; whole coins only. It overrides delta." },
-    additional: { type: "boolean", description: "Only when a player just accepted this same amount and this is another sum from a different source." },
+    additional: { type: "boolean", description: "Only when this exact amount is intentionally a second payment from a different source; otherwise an identical recent change is refused." },
   }, []),
   tool("grant_item", "Give a character items (loot, purchase, gift) the fiction actually put in their hands. Every item they take goes in items, one entry each, in one call.", {
     ...waypointProperty,
@@ -327,7 +328,7 @@ export const mutationTools: ToolDef[] = [
           unidentified: { type: "boolean", description: "True when the party cannot tell what it is yet; item then describes it, not its true name. E.g. 'an ornate silver ring'; reveal_item names it later." },
           item: { type: "string", description: "The item's name in the table's words." },
           qty: { type: "integer", minimum: 1, maximum: 99 },
-          additional: { type: "boolean", description: "Only when a player just accepted this same item and this is another one from a different source." },
+          additional: { type: "boolean", description: "Only when this exact item is intentionally a second copy from a different source; otherwise an identical recent grant is refused." },
           srdName: ITEM_SRD_NAME_PROPERTY,
           tags: ITEM_TAGS_PROPERTY,
           worth: { type: "number", description: ITEM_WORTH_PROPERTY.description },
@@ -513,6 +514,8 @@ const argsSchema = z.object({
   // Parsed to copper by src/lib/srd/currency.ts, and it wins over `delta`
   // when both are sent, because it is the more specific of the two.
   coins: z.string().max(60).optional(),
+  // A distinct copy of an identical reward from another source.
+  additional: z.coerce.boolean().optional(),
   name: z.string().optional(),
   // grant_item: the party cannot tell what this is yet.
   unidentified: z.coerce.boolean().optional(),
@@ -733,6 +736,19 @@ function dmMutation(
       null;
     return stale ? getSheetById(stale.id) : null;
   };
+
+  // Approval-enabled tables reject duplicate offers. Auto-applied tables use
+  // the completed audit trail so retries cannot grant the same loot twice.
+  if (toolName === "grant_item" || toolName === "modify_gold") {
+    const target = resolve(args.characterId);
+    if (target) {
+      const repeated = duplicateAppliedProblem(
+        toolName, args, { id: target.id, name: target.name },
+        listRecentAudit(campaign.id, 1000), Date.now(),
+      );
+      if (repeated) return { result: repeated };
+    }
+  }
 
   // The spoils of one moment, split in one call. Every part of it goes
   // through the ordinary single-target mutations below, so the audit trail,
@@ -1217,7 +1233,9 @@ function dmMutation(
         return { result: noRoom };
       }
       patchSheet(sheet.id, { equipment: math.equipment });
-      audit(campaign, turnId, sheet, "grant_item", { name, qty: args.qty ?? 1 }, reason, {
+      audit(campaign, turnId, sheet, "grant_item", {
+        name, qty: args.qty ?? 1, ...(listed.srdName ? { srdName: listed.srdName } : {}),
+      }, reason, {
         equipment: math.equipment,
       });
       publishSheet(campaign, sheet.id);

@@ -17,7 +17,7 @@ import { DEED_KINDS, type DeedKind } from "./companion-values-logic.ts";
 import { BOND_MOVES, bondClaim, bondKindLine, type BondClaim } from "./story-moves-logic.ts";
 import { ARC_MARKER } from "./tool-text.ts";
 
-export const CLAIM_KINDS = ["hit", "miss", "dies", "downed", "amount", "cast", "fight_start", "roll_ask", "aside", "speaker", "turn_over", "deed", "bond"] as const;
+export const CLAIM_KINDS = ["hit", "miss", "dies", "downed", "amount", "cast", "fight_start", "roll_ask", "item", "coin", "aside", "speaker", "turn_over", "deed", "bond"] as const;
 export type ClaimKind = (typeof CLAIM_KINDS)[number];
 
 export const ROLL_ASK_CHECKS = ["skill", "ability", "save", "initiative"] as const;
@@ -34,6 +34,8 @@ export type NarrationClaim =
   | { kind: "amount"; value: number; of: "damage" | "healing"; quote: string }
   // casterId: the party ref (a sheet id), so an unpaid cast can be cast.
   | { kind: "cast"; caster: string; casterId?: string; spell: string; quote: string }
+  | { kind: "item"; character: string; characterId: string; item: string; qty: number; direction: "gain" | "loss"; quote: string }
+  | { kind: "coin"; character: string; characterId: string; amount: number; denomination: "pp" | "gp" | "ep" | "sp" | "cp"; direction: "gain" | "loss"; quote: string }
   | { kind: "fight_start"; quote: string }
   | {
       kind: "roll_ask";
@@ -71,6 +73,9 @@ export type ReaderGate = {
   numbers: boolean;
   // There is a party to cast a spell or be asked to roll.
   party: boolean;
+  // Item and coin changes are checked whenever the narration guard is on.
+  inventory?: boolean;
+  coin?: boolean;
   // The reply may still ask a roll the turn can make (not the last call,
   // and the reply does not already call request_roll).
   rollAsk: boolean;
@@ -119,6 +124,8 @@ export function claimKindsFor(gate: ReaderGate): ClaimKind[] {
   if (gate.guard && gate.party) {
     kinds.push("cast");
   }
+  if (gate.guard && gate.inventory) kinds.push("item");
+  if (gate.guard && gate.coin) kinds.push("coin");
   if (gate.fightStart) {
     kinds.push("fight_start");
   }
@@ -160,6 +167,8 @@ const KIND_LINES: Record<Exclude<ClaimKind, "bond">, string> = {
   // gestures, weapons drawn and fights between others stay out by name: a
   // claim here makes the model start an encounter (gpt-oss read a threat, an
   // ogre's jabbing finger and sparring guards as fights before they did).
+  item: '{"kind":"item","character":PARTY_REF,"item":"the exact item named in the prose","qty":N,"direction":"gain"|"loss","quote":Q}: a party character gains or loses a specific carried item now. Count a find, pickup, gift, purchase, sale, drop or consumption; do not report a person merely seeing, wanting or discussing it.',
+  coin: '{"kind":"coin","character":PARTY_REF,"amount":N,"denomination":"pp"|"gp"|"ep"|"sp"|"cp","direction":"gain"|"loss","quote":Q}: a party character gains or loses coins now. The amount and denomination come only from the prose.',
   fight_start:
     '{"kind":"fight_start","quote":Q}: a fight begins now. Report it for any one of: a call to roll initiative; a stat-block style enemy roster (enemy counts with challenge ratings, a surprise field); hostile creatures attacking a party character now: an ambush springing on them, enemies charging, leaping or rushing at them, a blow struck or a shot loosed at one of them (the attack beginning is enough, landed or not). quote is the words of that attack or that call. Never for words, threats, demands, warnings or gestures, or weapons drawn or aimed with no attack made yet; a fight between others that no party character is in (sparring, a brawl across the room); a fight that might come, is told as past, or is over.',
   roll_ask:
@@ -372,6 +381,8 @@ const claimSchema = z.discriminatedUnion("kind", [
     spent: z.string().max(20).nullable().optional(),
     quote: quoteField,
   }),
+  z.object({ kind: z.literal("item"), character: z.string().min(1).max(120), item: z.string().trim().min(1).max(120), qty: z.number().int().min(1).max(999), direction: z.enum(["gain", "loss"]), quote: quoteField }),
+  z.object({ kind: z.literal("coin"), character: z.string().min(1).max(120), amount: z.number().int().min(1).max(100000), denomination: z.enum(["pp", "gp", "ep", "sp", "cp"]), direction: z.enum(["gain", "loss"]), quote: quoteField }),
   z.object({ kind: z.literal("fight_start"), quote: quoteField }),
   z.object({
     kind: z.literal("roll_ask"),
@@ -510,6 +521,16 @@ export function checkClaims(raw: readonly unknown[], context: ClaimContext): Nar
           kept.push(claim);
         }
         break;
+      case "item": {
+        const name = context.party.get(claim.character);
+        if (name) kept.push({ ...claim, character: name, characterId: claim.character });
+        break;
+      }
+      case "coin": {
+        const name = context.party.get(claim.character);
+        if (name) kept.push({ ...claim, character: name, characterId: claim.character });
+        break;
+      }
       case "amount":
       case "fight_start":
       case "aside":

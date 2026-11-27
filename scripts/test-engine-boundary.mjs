@@ -68,6 +68,28 @@ const cast = (caster, spell) => ({ kind: "cast", caster, spell, quote: `${caster
 
 const kinds = (found) => found.map((entry) => entry.kind).sort();
 
+test("inventory and coin narration must match successful tool receipts", () => {
+  const found = rule([
+    { kind: "item", character: "Kara", characterId: "c1", item: "Bandages", qty: 2, direction: "gain", quote: "Kara finds two bandages" },
+    { kind: "coin", character: "Kara", characterId: "c1", amount: 3, denomination: "sp", direction: "gain", quote: "Kara finds three silver" },
+  ], [
+    { name: "grant_item", args: { characterId: "c1", items: [{ item: "Bandages", qty: 2 }] }, result: { error: "unknown item", retry: true } },
+  ]);
+  assert.deepEqual(kinds(found), ["coin", "item"]);
+  assert.ok(buildCorrectionPrompt(found, ["grant_item REFUSED: unknown item"]).includes("grant_item REFUSED"));
+});
+
+test("successful item and coin transfers support matching narration", () => {
+  const found = rule([
+    { kind: "item", character: "Kara", characterId: "c1", item: "Dagger", qty: 1, direction: "gain", quote: "Kara takes a dagger" },
+    { kind: "coin", character: "Kara", characterId: "c1", amount: 3, denomination: "sp", direction: "gain", quote: "Kara takes three silver" },
+  ], [
+    { name: "grant_item", args: { characterId: "c1", item: "Dagger", qty: 1 }, result: { ok: true, granted: "Dagger" } },
+    { name: "modify_gold", args: { characterId: "c1", coins: "+3 sp" }, result: { ok: true, purse: "3 sp" } },
+  ]);
+  assert.equal(found.length, 0);
+});
+
 // Realistic result payloads, shaped exactly like the engines produce them.
 const attackMissed = {
   name: "pc_attack",

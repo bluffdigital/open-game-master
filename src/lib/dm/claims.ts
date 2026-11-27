@@ -233,7 +233,7 @@ export function guardGate(
   campaign: Campaign,
   outcomes: ResolvedOutcomes,
   sheets: readonly CharacterSheet[],
-): Pick<ReaderGate, "guard" | "attacks" | "fight" | "creatures" | "numbers" | "party" | "deeds" | "bonds"> {
+): Pick<ReaderGate, "guard" | "attacks" | "fight" | "creatures" | "numbers" | "party" | "inventory" | "coin" | "deeds" | "bonds"> {
   return {
     guard: campaign.gameSettings.narrationGuard,
     attacks: outcomes.attacks.size > 0,
@@ -241,6 +241,8 @@ export function guardGate(
     creatures: outcomes.creatures.size > 0,
     numbers: outcomes.numbers.size > 0 || Boolean(outcomes.liveFight),
     party: sheets.length > 0,
+    inventory: campaign.gameSettings.narrationGuard && sheets.length > 0,
+    coin: campaign.gameSettings.narrationGuard && sheets.length > 0,
     // Read in the same call as the rest, never one of its own (issue 503).
     deeds: conscienceOn(campaign) && consciousCompanions(sheets).length > 0,
     // The same (issue 641); readClaims drops it from a passage that names
