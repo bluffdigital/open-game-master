@@ -192,6 +192,14 @@ export const SETTLED_OFFERS_MAX = 8;
 
 export type OfferArgs = ProposalArgs & { coins?: string; additional?: boolean; unidentified?: boolean };
 
+export type RecentAppliedMutation = {
+  kind: string;
+  characterId: string;
+  delta: Record<string, unknown>;
+  createdAt: string;
+  revertedAt: string | null;
+};
+
 export type OfferSheet = {
   name: string;
   equipment: Array<{ name: string; qty: number; srdName?: string }>;
@@ -324,6 +332,37 @@ export function duplicateOfferProblem(
         return { error: `${character.name}'s player already accepted "${summary}" ${minutes} minute${minutes === 1 ? "" : "s"} ago and it was applied; that ${what} is claimed. Do not grant it twice. Only if this is truly another, separate ${what} from a different source, call again with additional: true.`, retry: true };
       }
     }
+  }
+  return null;
+}
+
+// Auto-applied tables need the same replay protection as approval offers.
+// Display names and their SRD row share one identity (Rusty Dagger / Dagger).
+export function duplicateAppliedProblem(
+  toolName: string,
+  args: OfferArgs,
+  character: { id: string; name: string },
+  recent: readonly RecentAppliedMutation[],
+  nowMs: number,
+): ToolError | null {
+  if (args.additional || (toolName !== "grant_item" && toolName !== "modify_gold")) return null;
+  const summary = proposalSummary(toolName, args, character.name);
+  const qty = Math.max(1, Math.floor(Number(args.qty ?? 1) || 1));
+  const wantedCoin = toolName === "modify_gold" ? coinMove(args.delta, args.coins) : null;
+  const aliases = new Set([args.item, (args as { srdName?: unknown }).srdName]
+    .flatMap((name) => typeof name === "string" && name.trim() ? [textKey(name.trim())] : []));
+  for (const entry of recent) {
+    if (entry.revertedAt || entry.characterId !== character.id || entry.kind !== toolName) continue;
+    const age = nowMs - Date.parse(entry.createdAt);
+    if (!Number.isFinite(age) || age < 0 || age > DUPLICATE_OFFER_WINDOW_MS) continue;
+    const same = toolName === "modify_gold"
+      ? wantedCoin !== null && "copper" in wantedCoin && Number(entry.delta.copper) === wantedCoin.copper
+      : Number(entry.delta.qty ?? 1) === qty && [entry.delta.name, entry.delta.srdName]
+          .some((name) => typeof name === "string" && aliases.has(textKey(name)));
+    if (!same) continue;
+    const minutes = Math.max(1, Math.round(age / 60_000));
+    const what = toolName === "modify_gold" ? "coin" : "loot";
+    return { error: `${character.name} already received "${summary}" ${minutes} minute${minutes === 1 ? "" : "s"} ago and it is already on their sheet. This ${what} is claimed. Only if this is truly a separate ${what} from a different source, call again with additional: true.`, retry: true };
   }
   return null;
 }
