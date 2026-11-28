@@ -5,12 +5,17 @@ L=/workspace/logs; mkdir -p $L /workspace/venvs /workspace/apt-cache
 # apt deps (debs cached on /workspace so a restart can reinstall offline)
 apt-get update -y > $L/apt.log 2>&1
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Dir::Cache::archives=/workspace/apt-cache espeak-ng espeak-ng-data libsndfile1 ffmpeg >> $L/apt.log 2>&1 && echo APT_DONE >> $L/apt.log
-# ---- vLLM + model ----
+# ---- vLLM (no multi-GB model download here) ----
+# Default gm_model is qwen36: start_services.sh serves Qwen/Qwen3.6-35B-A3B-FP8
+# with HF_HUB_OFFLINE=1. Weights must already live under /workspace/hf (or the
+# profile's container path for qwen36_27b / llama33). Do not fetch checkpoints
+# here — a fresh pull of the default FP8 is tens of GB and is volume-side.
+# Rollback Qwen2.5-32B-Instruct-AWQ weights may still be in /workspace/hf from
+# older installs; start_services.sh.bak-qwen25-* is the serve path for those.
 (
 set -e
 uv venv --python /usr/bin/python3.12 /workspace/venvs/vllm
 VIRTUAL_ENV=/workspace/venvs/vllm uv pip install vllm "huggingface_hub[cli]" hf_transfer
-HF_HUB_ENABLE_HF_TRANSFER=1 /workspace/venvs/vllm/bin/hf download Qwen/Qwen2.5-32B-Instruct-AWQ
 /workspace/venvs/vllm/bin/python -c 'import vllm;print("vllm",vllm.__version__)'
 echo VLLM_INSTALL_DONE
 ) > $L/install_vllm.log 2>&1 &

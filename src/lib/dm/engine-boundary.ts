@@ -18,7 +18,6 @@ import { textKey, WORD_CHAR } from "../language/text-logic.ts";
 import { splitParts } from "./action-parts-logic.ts";
 import { withoutLeadingStopWords } from "../language/language.ts";
 import type { TableLanguage } from "../schemas/game-settings-options.ts";
-import { coinMove } from "../srd/currency.ts";
 
 // ---------------------------------------------------------------------------
 // Part 1: the contract block
@@ -145,9 +144,6 @@ export type ResolvedOutcomes = {
   // The party's fighters in a running fight, by the key a creature is given
   // (normalizeCreatureName), with their sheet id and name (LiveState.party).
   party?: Map<string, { id: string; display: string }>;
-  items: Array<{ characterId: string; item: string; qty: number; direction: "gain" | "loss"; aliases: string[] }>;
-  coins: Array<{ characterId: string; copper: number }>;
-  toolReceipts: string[];
 };
 
 function parseJsonObject(raw: unknown): Record<string, unknown> | null {
@@ -428,9 +424,6 @@ export function resolveOutcomes(
   const effectNumbers = new Set<number>();
   const spells = new Set<string>();
   const spends: ResolvedOutcomes["spends"] = [];
-  const items: ResolvedOutcomes["items"] = [];
-  const coins: ResolvedOutcomes["coins"] = [];
-  const toolReceipts: string[] = [];
   const refusedTargets: string[] = [];
   const targeted = new Set<string>();
   let toolResultCount = 0;
@@ -463,41 +456,13 @@ export function resolveOutcomes(
     }
     const result = exchange.result;
     if (!result || "error" in result) {
-      if (result && "error" in result) {
-        toolReceipts.push(`${exchange.name} REFUSED: ${String(result.error).slice(0, 280)}`);
-      }
       continue;
-    }
-    const characterId = typeof args.characterId === "string" ? args.characterId : "";
-    if (characterId && (exchange.name === "grant_item" || exchange.name === "remove_item" || exchange.name === "use_item" || exchange.name === "purchase")) {
-      const name = String(args.item ?? result.granted ?? result.bought ?? result.sold ?? result.used ?? "").trim();
-      if (name) {
-        const direction = exchange.name === "remove_item" || exchange.name === "use_item" || (exchange.name === "purchase" && args.action === "sell") ? "loss" : "gain";
-        const qty = Math.max(1, Math.floor(Number(args.qty ?? result.qty ?? 1) || 1));
-        const aliases = [name, args.srdName].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
-        items.push({ characterId, item: name, qty, direction, aliases });
-        toolReceipts.push(`${exchange.name} ${direction === "gain" ? "granted" : "removed"} ${qty}x ${name}`);
-      }
-    }
-    if (characterId && exchange.name === "modify_gold") {
-      const move = coinMove(args.delta, args.coins);
-      if ("copper" in move && move.copper !== 0) {
-        coins.push({ characterId, copper: move.copper });
-        toolReceipts.push(`modify_gold applied ${move.copper} cp; ${String(result.purse ?? "purse updated")}`);
-      }
-    } else if (characterId && exchange.name === "purchase") {
-      const written = String(args.action === "sell" ? result.received ?? "" : result.paid ?? "").trim();
-      const move = coinMove(undefined, written ? `${args.action === "sell" ? "+" : "-"}${written}` : undefined);
-      if ("copper" in move && move.copper !== 0) coins.push({ characterId, copper: move.copper });
-    }
-    if (["party_award", "award_xp", "use_resource", "use_spell_slot", "pc_attack"].includes(exchange.name)) {
-      toolReceipts.push(`${exchange.name} SUCCEEDED: ${JSON.stringify(result).slice(0, 320)}`);
     }
     toolResultCount += 1;
     const spent = spentName(args);
-    const spenderId = args.characterId;
-    if (typeof spenderId === "string" && spent && !spends.some((entry) => entry.characterId === spenderId && entry.name === spent)) {
-      spends.push({ characterId: spenderId, name: spent });
+    const characterId = args.characterId;
+    if (typeof characterId === "string" && spent && !spends.some((entry) => entry.characterId === characterId && entry.name === spent)) {
+      spends.push({ characterId, name: spent });
     }
     walkNumbers(result, numbers, damageNumbers);
     if (!CHECK_TOOLS.has(exchange.name)) {
@@ -636,9 +601,6 @@ export function resolveOutcomes(
     effectNumbers,
     spells,
     spends,
-    items,
-    coins,
-    toolReceipts,
     toolResultCount,
     touched,
     ...(party.size ? { party } : {}),
@@ -656,7 +618,7 @@ export function resolveOutcomes(
 export type Contradiction = {
   // "card": a card from the Hand no call carried out (issue 570), which goes
   // back to its player; nothing in the prose is quoted for it.
-  kind: "hit" | "miss" | "death" | "number" | "spell" | "item" | "coin" | "card";
+  kind: "hit" | "miss" | "death" | "number" | "spell" | "card";
   detail: string;
   clause: string;
   // A spell's: who the prose has casting it, so the one their player asked
@@ -781,28 +743,6 @@ export function ruleClaims(claims: readonly NarrationClaim[], outcomes: Resolved
           });
         }
         break;
-      case "item": {
-        const wanted = textKey(claim.item);
-        const matched = outcomes.items.some((entry) =>
-          entry.characterId === claim.characterId && entry.qty === claim.qty && entry.direction === claim.direction &&
-          entry.aliases.some((name) => {
-            const alias = textKey(name);
-            return alias === wanted || wanted.endsWith(` ${alias}`) || alias.endsWith(` ${wanted}`);
-          }),
-        );
-        if (!matched) {
-          add({ kind: "item", detail: `no successful item tool ${claim.direction === "gain" ? "granted" : "removed"} ${claim.qty}x ${claim.item} for ${claim.character}; the narration claims it changed hands`, clause: claim.quote });
-        }
-        break;
-      }
-      case "coin": {
-        const move = coinMove(undefined, `${claim.direction === "gain" ? "+" : "-"}${claim.amount} ${claim.denomination}`);
-        const matched = "copper" in move && outcomes.coins.some((entry) => entry.characterId === claim.characterId && entry.copper === move.copper);
-        if (!matched) {
-          add({ kind: "coin", detail: `no successful coin tool moved ${claim.direction === "gain" ? "+" : "-"}${claim.amount} ${claim.denomination} for ${claim.character}; the narration claims it changed hands`, clause: claim.quote });
-        }
-        break;
-      }
       case "fight_start":
       case "roll_ask":
         break;
@@ -819,15 +759,13 @@ export function guardOutcomes(conversation: readonly GuardMessage[], live: LiveS
 
 // The correction the model is asked to make. Kept here so the wording is
 // testable without a model call.
-export function buildCorrectionPrompt(contradictions: readonly Contradiction[], toolReceipts: readonly string[] = []): string {
+export function buildCorrectionPrompt(contradictions: readonly Contradiction[]): string {
   const lines = contradictions
     .slice(0, 6)
     .map((entry) => `- ${entry.detail}.${entry.clause ? ` You wrote: "${entry.clause}"` : ""}`)
     .join("\n");
-  const receipts = toolReceipts.slice(-12);
-  const evidence = receipts.length ? `\n\nAuthoritative tool receipts from this turn:\n${receipts.map((entry) => `- ${entry}`).join("\n")}` : "";
   return `[System] Your narration contradicts what the dice and tools actually resolved this turn. The tool results are the truth; the prose is what is wrong.
-${lines}${evidence}
+${lines}
 Rewrite the whole narration so it matches the real results exactly. Keep everything else: the same scene, the same length, the same voice, the same closing beat. Change only what contradicts the results. Do not call any tool, do not mention this correction, and reply with the corrected narration only.`;
 }
 
